@@ -96,28 +96,100 @@ const callOdoo = async (model, method, args = [], kwargs = {}) => {
   }
 };
 
-// 3. OBTENER LISTA DE EQUIPOS (Actualizado con tus campos)
+// ==========================================
+// MÓDULO: EQUIPOS
+// ==========================================
+
 export const fetchEquipos = async () => {
   return await callOdoo('maintenance.equipment', 'search_read', [[]], {
-    // No traemos la imagen aquí para no hacer lenta la lista
     fields: ['name', 'serial_no', 'mars_marca', 'mars_capacidad', 'mars_ramales', 'mars_voltaje_fuerza', 'mars_tipo_alimentacion', 'mars_tipo_control'],
   });
 };
 
-// 4. CREAR EQUIPO
 export const createEquipo = async (data) => {
   return await callOdoo('maintenance.equipment', 'create', [data]);
 };
 
-// 5. ACTUALIZAR EQUIPO
 export const updateEquipo = async (id, data) => {
   return await callOdoo('maintenance.equipment', 'write', [[id], data]);
 };
 
-// 6. OBTENER IMAGEN DE UN EQUIPO (Para el modo edición)
 export const fetchEquipoImagen = async (id) => {
   const result = await callOdoo('maintenance.equipment', 'search_read', [[['id', '=', id]]], {
     fields: ['mars_placa_imagen'],
   });
   return result.length > 0 ? result[0].mars_placa_imagen : null;
+};
+
+// ==========================================
+// MÓDULO: SOLICITUDES DE MANTENIMIENTO
+// ==========================================
+
+// ¡AQUÍ ESTÁ LA FUNCIÓN QUE FALTABA!
+export const fetchSolicitudes = async () => {
+  return await callOdoo('maintenance.request', 'search_read', [[]], {
+    fields: [
+      'name', 
+      'request_date', 
+      'priority', 
+      'stage_id',
+      // --- TUS NUEVOS CAMPOS ---
+      'mars_title', 
+      'maintenance_type', 
+      'mars_client_id',
+      'mars_oc', 
+      'mars_item', 
+      'mars_emission_date', 
+      'mars_inspector',
+      'mars_applicable_norm', 
+      'mars_diagnosis', 
+      'mars_conclusions',
+      'mars_equipment_ids',
+      // ¡NUEVO! Le pedimos los arrays con los IDs de las fotos
+      'mars_photo_ids', 'mars_acta_ids', 'mars_gancho_ids'
+    ],
+  });
+};
+
+export const createSolicitud = async (data) => {
+  return await callOdoo('maintenance.request', 'create', [data]);
+};
+
+export const updateSolicitud = async (id, data) => {
+  return await callOdoo('maintenance.request', 'write', [[id], data]);
+};
+
+// OBTENER CLIENTES
+export const fetchClientes = async () => {
+  return await callOdoo('res.partner', 'search_read', [[['is_company', '=', true]]], {
+    fields: ['name', 'id'],
+  });
+};
+
+// OBTENER EMPLEADOS
+export const fetchEmpleados = async () => {
+  return await callOdoo('hr.employee', 'search_read', [[]], {
+    fields: ['name', 'job_title', 'id'],
+  });
+};
+
+// NUEVA FUNCIÓN: Descarga las fotos en Base64 a partir de sus IDs
+export const fetchFotos = async (photoIds) => {
+  if (!photoIds || photoIds.length === 0) return [];
+  return await callOdoo('maintenance.request.photo', 'search_read', [[['id', 'in', photoIds]]], {
+    fields: ['image', 'photo_type', 'equipment_id', 'subtitle'],
+  });
+};
+
+// NUEVA FUNCIÓN: Trae todos los detalles de una sola solicitud
+export const fetchSolicitudDetalle = async (id) => {
+  return await callOdoo('maintenance.request', 'search_read', [[['id', '=', id]]], {
+    fields: [
+      'name', 'mars_title', 'maintenance_type', 'mars_client_id',
+      'mars_oc', 'mars_item', 'mars_emission_date', 'mars_inspector',
+      'mars_applicable_norm', 'mars_diagnosis', 'mars_conclusions',
+      'mars_equipment_ids', 'mars_worker_ids', 'mars_electrical_ids',
+      'mars_photo_ids', 'mars_acta_ids', 'mars_gancho_ids'
+    ],
+  });
 };
