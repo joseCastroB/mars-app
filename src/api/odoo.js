@@ -189,7 +189,29 @@ export const fetchSolicitudDetalle = async (id) => {
       'mars_oc', 'mars_item', 'mars_emission_date', 'mars_inspector',
       'mars_applicable_norm', 'mars_diagnosis', 'mars_conclusions',
       'mars_equipment_ids', 'mars_worker_ids', 'mars_electrical_ids',
-      'mars_photo_ids', 'mars_acta_ids', 'mars_gancho_ids'
+      'mars_photo_ids', 'mars_acta_ids', 'mars_gancho_ids',
+      // ¡AQUÍ ESTÁN LOS NUEVOS CAMPOS DEL CERTIFICADO!
+      'mars_inspector_certificate', 'mars_inspector_certificate_name'
+    ],
+  });
+};
+
+// NUEVA FUNCIÓN: Descarga los detalles del personal asignado
+export const fetchTrabajadores = async (workerIds) => {
+  if (!workerIds || workerIds.length === 0) return [];
+  return await callOdoo('maintenance.request.worker', 'search_read', [[['id', 'in', workerIds]]], {
+    // Pedimos el ID del empleado (que trae su nombre) y el cargo
+    fields: ['employee_id', 'job_title'], 
+  });
+};
+
+// NUEVA FUNCIÓN: Descarga las medidas eléctricas
+export const fetchMedidasElectricas = async (ids) => {
+  if (!ids || ids.length === 0) return [];
+  return await callOdoo('maintenance.request.electrical.data', 'search_read', [[['id', 'in', ids]]], {
+    fields: [
+      'equipment_id', 'tension_nominal', 'tension_l1_l2', 'tension_l1_l3', 'tension_l2_l3', 
+      'corriente_datos', 'corriente_l1', 'corriente_l2', 'corriente_l3'
     ],
   });
 };

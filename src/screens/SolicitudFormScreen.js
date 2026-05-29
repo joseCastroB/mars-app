@@ -3,9 +3,10 @@ import * as ImagePicker from 'expo-image-picker';
 // ¡ESTAS DOS LÍNEAS DEBEN ESTAR AQUÍ!
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Image, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { createSolicitud, fetchClientes, fetchEmpleados, fetchEquipos, fetchFotos, fetchSolicitudDetalle, updateSolicitud } from '../api/odoo';
+import { actions, RichEditor, RichToolbar } from 'react-native-pell-rich-editor';
+import { createSolicitud, fetchClientes, fetchEmpleados, fetchEquipos, fetchFotos, fetchMedidasElectricas, fetchSolicitudDetalle, fetchTrabajadores, updateSolicitud } from '../api/odoo';
 
 export default function SolicitudFormScreen({ onNavigate, solicitudData }) {
     const isEditing = !!solicitudData;
@@ -48,6 +49,8 @@ export default function SolicitudFormScreen({ onNavigate, solicitudData }) {
     const [tempPhoto, setTempPhoto] = useState(null);
     // NUEVO: Índice de la foto que estamos editando (-1 para nueva foto)
     const [editingPhotoIndex, setEditingPhotoIndex] = useState(null);
+    // NUEVO: Referencia para el editor de texto enriquecido
+    const richText = useRef(null);
 
     useEffect(() => {
         cargarDatosMaestros();
@@ -80,10 +83,56 @@ export default function SolicitudFormScreen({ onNavigate, solicitudData }) {
                     mars_diagnosis: data.mars_diagnosis || '',
                     mars_conclusions: data.mars_conclusions || '',
                     mars_equipment_ids: data.mars_equipment_ids || [],
+                    // ¡NUEVO!: Capturamos el archivo y su nombre
+                    mars_inspector_certificate: data.mars_inspector_certificate || null,
+                    mars_inspector_certificate_name: data.mars_inspector_certificate_name || '',
                 });
+
+                // ¡NUEVO!: Empujamos el texto HTML al editor directamente
+                setTimeout(() => {
+                    if (richText.current) {
+                        // Odoo a veces devuelve "false" si el campo está vacío, por eso usamos || ''
+                        richText.current.setContentHTML(data.mars_conclusions || '');
+                    }
+                }, 500); // Medio segundo de espera mágica
 
                 // 3. Ejecutamos la descarga de las fotos con los IDs correctos
                 await cargarFotosDesdeOdoo(data);
+
+                // NUEVO: 4. Descargar Personal Asignado
+                if (data.mars_worker_ids && data.mars_worker_ids.length > 0) {
+                    const workersData = await fetchTrabajadores(data.mars_worker_ids);
+
+                    setTrabajadores(workersData.map(w => ({
+                        line_id: w.id,          // Guardamos el ID de esta línea en Odoo
+                        id: w.employee_id[0],   // ID interno del empleado
+                        name: w.employee_id[1], // Nombre del empleado
+                        job_title: w.job_title || ''
+                    })));
+                }
+
+                // NUEVO: 5. Descargar Medidas Eléctricas
+                if (data.mars_electrical_ids && data.mars_electrical_ids.length > 0) {
+                    const electricalData = await fetchMedidasElectricas(data.mars_electrical_ids);
+                    const medidasCargadas = {};
+
+                    electricalData.forEach(item => {
+                        const eqId = item.equipment_id[0]; // ID del equipo
+                        medidasCargadas[eqId] = {
+                            line_id: item.id, // ¡Guardamos el ID de la línea para actualizarla y no duplicarla!
+                            tension_nominal: item.tension_nominal || '440',
+                            // Convertimos los números de Odoo a texto para los TextInputs
+                            tension_l1_l2: item.tension_l1_l2 ? item.tension_l1_l2.toString() : '',
+                            tension_l1_l3: item.tension_l1_l3 ? item.tension_l1_l3.toString() : '',
+                            tension_l2_l3: item.tension_l2_l3 ? item.tension_l2_l3.toString() : '',
+                            corriente_datos: item.corriente_datos || 'IZQ/DERECHA',
+                            corriente_l1: item.corriente_l1 ? item.corriente_l1.toString() : '',
+                            corriente_l2: item.corriente_l2 ? item.corriente_l2.toString() : '',
+                            corriente_l3: item.corriente_l3 ? item.corriente_l3.toString() : '',
+                        };
+                    });
+                    setMedidasElectricas(medidasCargadas);
+                }
             }
         } catch (error) {
             Alert.alert('Error', 'No se pudieron cargar los detalles de la solicitud.');
@@ -296,7 +345,7 @@ export default function SolicitudFormScreen({ onNavigate, solicitudData }) {
                 mars_inspector: formData.mars_inspector,
                 mars_applicable_norm: formData.mars_applicable_norm,
                 mars_diagnosis: formData.mars_diagnosis,
-                mars_conclusions: `<p>${formData.mars_conclusions}</p>`, // Formato HTML básico
+                mars_conclusions: formData.mars_conclusions, // Formato HTML básico
                 mars_client_id: formData.mars_client_id,
                 mars_equipment_ids: [[6, 0, formData.mars_equipment_ids]], // Tupla Odoo
 
@@ -309,21 +358,39 @@ export default function SolicitudFormScreen({ onNavigate, solicitudData }) {
 
             // 2. Formatear Trabajadores (One2many)
             if (trabajadores.length > 0) {
-                payload.mars_worker_ids = trabajadores.map(t => [0, 0, { employee_id: t.id, job_title: t.job_title }]);
+                payload.mars_worker_ids = trabajadores.map(t => {
+                    if (t.line_id) {
+                        // Si tiene line_id, significa que ya vino de Odoo: Actualizamos (Comando 1)
+                        return [1, t.line_id, { job_title: t.job_title }];
+                    } else {
+                        // Si NO tiene line_id, es porque el usuario le dio a "Añadir Empleado": Creamos (Comando 0)
+                        return [0, 0, { employee_id: t.id, job_title: t.job_title }];
+                    }
+                });
             }
 
             // 3. Formatear Medidas Eléctricas (One2many)
-            const tablasTuplas = Object.keys(medidasElectricas).map(eqId => ([0, 0, {
-                equipment_id: parseInt(eqId),
-                tension_nominal: medidasElectricas[eqId].tension_nominal,
-                tension_l1_l2: parseFloat(medidasElectricas[eqId].tension_l1_l2) || 0.0,
-                tension_l1_l3: parseFloat(medidasElectricas[eqId].tension_l1_l3) || 0.0,
-                tension_l2_l3: parseFloat(medidasElectricas[eqId].tension_l2_l3) || 0.0,
-                corriente_datos: medidasElectricas[eqId].corriente_datos,
-                corriente_l1: parseFloat(medidasElectricas[eqId].corriente_l1) || 0.0,
-                corriente_l2: parseFloat(medidasElectricas[eqId].corriente_l2) || 0.0,
-                corriente_l3: parseFloat(medidasElectricas[eqId].corriente_l3) || 0.0,
-            }]));
+            const tablasTuplas = Object.keys(medidasElectricas).map(eqId => {
+                const medida = medidasElectricas[eqId];
+                const valores = {
+                    equipment_id: parseInt(eqId),
+                    tension_nominal: medida.tension_nominal,
+                    tension_l1_l2: parseFloat(medida.tension_l1_l2) || 0.0,
+                    tension_l1_l3: parseFloat(medida.tension_l1_l3) || 0.0,
+                    tension_l2_l3: parseFloat(medida.tension_l2_l3) || 0.0,
+                    corriente_datos: medida.corriente_datos,
+                    corriente_l1: parseFloat(medida.corriente_l1) || 0.0,
+                    corriente_l2: parseFloat(medida.corriente_l2) || 0.0,
+                    corriente_l3: parseFloat(medida.corriente_l3) || 0.0,
+                };
+
+                // Si ya tiene line_id, usamos comando 1 (Actualizar). Si no, comando 0 (Crear).
+                if (medida.line_id) {
+                    return [1, medida.line_id, valores];
+                } else {
+                    return [0, 0, valores];
+                }
+            });
             if (tablasTuplas.length > 0) payload.mars_electrical_ids = tablasTuplas;
 
             // 4. Formatear Fotos (One2many mapeado al modelo photo)
@@ -596,10 +663,37 @@ export default function SolicitudFormScreen({ onNavigate, solicitudData }) {
                     )}
                 </View>
 
+                {/* SECCIÓN 6: CONCLUSIONES (Texto Enriquecido) */}
                 <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>6. Diagnóstico y Conclusiones</Text>
-                    <TextInput style={[styles.input, { height: 80, textAlignVertical: 'top' }]} placeholder="Diagnóstico técnico..." multiline value={formData.mars_diagnosis} onChangeText={(v) => setFormData({ ...formData, mars_diagnosis: v })} />
-                    <TextInput style={[styles.input, { height: 100, textAlignVertical: 'top', marginTop: 10 }]} placeholder="Conclusiones finales..." multiline value={formData.mars_conclusions} onChangeText={(v) => setFormData({ ...formData, mars_conclusions: v })} />
+                    <Text style={styles.sectionTitle}>6. Conclusiones</Text>
+
+                    <View style={styles.richTextContainer}>
+                        <RichToolbar
+                            editor={richText}
+                            actions={[
+                                actions.setBold,
+                                actions.setItalic,
+                                actions.setUnderline,
+                                actions.insertBulletsList,
+                                actions.insertOrderedList,
+                                actions.undo,
+                                actions.redo,
+                            ]}
+                            iconTint="#01579b"
+                            selectedIconTint="#e74c3c"
+                            style={styles.richBar}
+                        />
+                        <RichEditor
+                            ref={richText}
+                            // Cargamos el HTML exacto de Odoo (incluyendo sus colores)
+                            initialContentHTML={formData.mars_conclusions}
+                            // Guardamos el nuevo HTML generado por el usuario
+                            onChange={(textoHTML) => setFormData({ ...formData, mars_conclusions: textoHTML })}
+                            placeholder="Escribe las conclusiones y hallazgos aquí..."
+                            editorStyle={{ backgroundColor: '#fafafa', color: '#333' }}
+                            containerStyle={styles.richEditorContainer}
+                        />
+                    </View>
                 </View>
 
             </ScrollView>
@@ -770,4 +864,9 @@ const styles = StyleSheet.create({
         borderRadius: 8,
         overflow: 'hidden'
     },
+
+    // Estilos para el Editor de Texto
+    richTextContainer: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, overflow: 'hidden', backgroundColor: '#fafafa' },
+    richBar: { backgroundColor: '#f0f4f8', borderBottomWidth: 1, borderColor: '#ddd' },
+    richEditorContainer: { minHeight: 150 },
 });
