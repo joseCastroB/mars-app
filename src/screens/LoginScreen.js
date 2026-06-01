@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -57,7 +58,11 @@ export default function LoginScreen({ onLoginSuccess }) {
         // Esto permite que el contenido rebote si lo empujas hacia arriba
         bounces={false} 
       >
-        <Text style={styles.title}>Mantenimiento Odoo</Text>
+        <Image 
+        source={require('../../assets/logo.png')} // Ajusta los '../' según en qué carpeta esté tu archivo LoginScreen
+        style={styles.logo} 
+        resizeMode="contain" 
+        />
         
         <View style={styles.inputContainer}>
           <TextInput
@@ -122,7 +127,7 @@ const styles = StyleSheet.create({
     borderColor: '#e0e0e0',
   },
   button: {
-    backgroundColor: '#01579b',
+    backgroundColor: '#0e0f0f',
     padding: 15,
     borderRadius: 8,
     alignItems: 'center',
@@ -131,5 +136,11 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  logo: {
+    width: '85%', // Toma el 80% del ancho de la pantalla
+    height: 220,  // Le da un buen alto sin distorsionarse gracias al resizeMode="contain"
+    alignSelf: 'center', // Lo centra horizontalmente
+    marginBottom: 30, // Da un respiro antes de los cuadros de texto
   },
 });

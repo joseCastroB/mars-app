@@ -3,10 +3,11 @@ import * as ImagePicker from 'expo-image-picker';
 // ¡ESTAS DOS LÍNEAS DEBEN ESTAR AQUÍ!
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Image, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, FlatList, Image, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { actions, RichEditor, RichToolbar } from 'react-native-pell-rich-editor';
-import { createSolicitud, fetchClientes, fetchEmpleados, fetchEquipos, fetchFotos, fetchMedidasElectricas, fetchSolicitudDetalle, fetchTrabajadores, updateSolicitud } from '../api/odoo';
+import { createSolicitud, fetchClientes, fetchEmpleados, fetchEquipos, fetchFotos, fetchMedidasElectricas, fetchRepuestos, fetchSolicitudDetalle, fetchTrabajadores, getReportConfig, updateSolicitud } from '../api/odoo';
 
 export default function SolicitudFormScreen({ onNavigate, solicitudData }) {
     const isEditing = !!solicitudData;
@@ -51,6 +52,10 @@ export default function SolicitudFormScreen({ onNavigate, solicitudData }) {
     const [editingPhotoIndex, setEditingPhotoIndex] = useState(null);
     // NUEVO: Referencia para el editor de texto enriquecido
     const richText = useRef(null);
+    // NUEVOS ESTADOS: Observaciones y Repuestos
+    const [repuestos, setRepuestos] = useState([]); // Lista en pantalla
+    const [deletedPartIds, setDeletedPartIds] = useState([]); // Control de eliminados en Odoo
+
 
     useEffect(() => {
         cargarDatosMaestros();
@@ -86,6 +91,9 @@ export default function SolicitudFormScreen({ onNavigate, solicitudData }) {
                     // ¡NUEVO!: Capturamos el archivo y su nombre
                     mars_inspector_certificate: data.mars_inspector_certificate || null,
                     mars_inspector_certificate_name: data.mars_inspector_certificate_name || '',
+                    // observaciones y repuestos
+                    mars_final_observations: data.mars_final_observations || '',
+                    mars_used_parts: data.mars_used_parts || false,
                 });
 
                 // ¡NUEVO!: Empujamos el texto HTML al editor directamente
@@ -133,6 +141,19 @@ export default function SolicitudFormScreen({ onNavigate, solicitudData }) {
                     });
                     setMedidasElectricas(medidasCargadas);
                 }
+
+                // NUEVO: 6. Descargar Repuestos Utilizados
+                if (data.mars_part_ids && data.mars_part_ids.length > 0) {
+                    const partsData = await fetchRepuestos(data.mars_part_ids);
+                    setRepuestos(partsData.map(p => ({
+                        line_id: p.id,
+                        name: p.name,
+                        quantity: p.quantity ? p.quantity.toString() : '1'
+                    })));
+                } else {
+                    setRepuestos([]);
+                }
+                setDeletedPartIds([]); // Limpiamos el historial de borrados al cargar
             }
         } catch (error) {
             Alert.alert('Error', 'No se pudieron cargar los detalles de la solicitud.');
@@ -348,6 +369,8 @@ export default function SolicitudFormScreen({ onNavigate, solicitudData }) {
                 mars_conclusions: formData.mars_conclusions, // Formato HTML básico
                 mars_client_id: formData.mars_client_id,
                 mars_equipment_ids: [[6, 0, formData.mars_equipment_ids]], // Tupla Odoo
+                mars_final_observations: formData.mars_final_observations,
+                mars_used_parts: formData.mars_used_parts,
 
                 // Incorporamos el certificado solo si el usuario adjuntó uno
                 ...(formData.mars_inspector_certificate && {
@@ -402,6 +425,19 @@ export default function SolicitudFormScreen({ onNavigate, solicitudData }) {
                     equipment_id: f.equipment_id,
                     subtitle: f.subtitle
                 }]);
+
+            // NUEVO PASO: Formatear tuplas de Repuestos
+            const tuplasRepuestos = [
+                ...repuestos.map(p => {
+                    const vals = { name: p.name, quantity: parseFloat(p.quantity) || 1.0 };
+                    return p.line_id ? [1, p.line_id, vals] : [0, 0, vals]; // 1 para editar, 0 para crear
+                }),
+                ...deletedPartIds.map(id => [2, id, 0]) // 2 para eliminar definitivamente de la BD de Odoo
+            ];
+            if (tuplasRepuestos.length > 0 || deletedPartIds.length > 0) {
+                payload.mars_part_ids = tuplasRepuestos;
+            }
+
             if (fotosGenerales.length > 0) payload.mars_photo_ids = formatearFotos(fotosGenerales);
             if (fotosActa.length > 0) payload.mars_acta_ids = formatearFotos(fotosActa);
             if (fotosGancho.length > 0) payload.mars_gancho_ids = formatearFotos(fotosGancho);
@@ -448,14 +484,84 @@ export default function SolicitudFormScreen({ onNavigate, solicitudData }) {
         }
     };
 
+    // --- LÓGICA PARA IMPRIMIR PDF ---
+    const handlePrintPDF = async () => {
+        if (!solicitudData?.id) {
+            Alert.alert('Aviso', 'Debes guardar la solicitud primero antes de imprimir el reporte.');
+            return;
+        }
+
+        setLoading(true);
+        try {
+            // 1. Obtenemos el enlace secreto y la llave de sesión de Odoo
+            const { url, headers } = getReportConfig(solicitudData.id);
+
+            // 2. Preparamos el nombre del archivo en el celular
+            const fileName = `Reporte_MARS_${formData.name || solicitudData.id}.pdf`;
+            const fileUri = FileSystem.documentDirectory + fileName;
+
+            // 3. Descargamos el archivo DIRECTO a la memoria (Mucho más rápido y seguro)
+            const downloadResult = await FileSystem.downloadAsync(url, fileUri, { headers });
+
+            // 4. Abrimos la ventana nativa de tu celular para compartir o guardar
+            if (await Sharing.isAvailableAsync()) {
+                await Sharing.shareAsync(downloadResult.uri, {
+                    mimeType: 'application/pdf',
+                    dialogTitle: 'Descargar Reporte MARS',
+                    UTI: 'com.adobe.pdf'
+                });
+            } else {
+                Alert.alert('Error', 'Tu dispositivo no soporta la función de compartir archivos.');
+            }
+        } catch (error) {
+            Alert.alert('Error al descargar', 'No se pudo generar el PDF. Verifica tu conexión a internet.');
+            console.log(error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+
+    // --- LÓGICA PARA OBSERVACIONES Y LISTA DE REPUESTOS---
+    const handleAddRepuesto = () => {
+        setRepuestos([...repuestos, { name: '', quantity: '1' }]);
+    };
+
+    const handleUpdateRepuesto = (index, field, value) => {
+        const nuevos = [...repuestos];
+        nuevos[index][field] = value;
+        setRepuestos(nuevos);
+    };
+
+    const handleRemoveRepuesto = (index) => {
+        const repuesto = repuestos[index];
+        // Si ya existía en Odoo, guardamos su ID para decirle al backend que lo borre definitivamente
+        if (repuesto.line_id) {
+            setDeletedPartIds([...deletedPartIds, repuesto.line_id]);
+        }
+        setRepuestos(repuestos.filter((_, i) => i !== index));
+    };
+
     return (
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
             <View style={styles.header}>
-                <TouchableOpacity onPress={() => onNavigate('MantenimientoList')}><FontAwesome5 name="arrow-left" size={20} color="#01579b" /></TouchableOpacity>
-                <Text style={styles.title}>{isEditing ? formData.name : 'Nueva Orden Mars'}</Text>
-                <TouchableOpacity onPress={handleSave} disabled={loading}>
-                    {loading ? <ActivityIndicator color="#01579b" /> : <Text style={styles.saveBtn}>Guardar</Text>}
+                <TouchableOpacity onPress={() => onNavigate('MantenimientoList')}>
+                    <FontAwesome5 name="arrow-left" size={20} color="#01579b" />
                 </TouchableOpacity>
+                <Text style={styles.title}>{isEditing ? formData.name : 'Nueva Orden Mars'}</Text>
+
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 15 }}>
+                    {/* BOTÓN IMPRIMIR: Solo aparece si estamos editando (ya tiene ID) */}
+                    {isEditing && (
+                        <TouchableOpacity onPress={handlePrintPDF} disabled={loading}>
+                            <FontAwesome5 name="print" size={20} color="#01579b" />
+                        </TouchableOpacity>
+                    )}
+
+                    <TouchableOpacity onPress={handleSave} disabled={loading}>
+                        <Text style={styles.saveText}>Guardar</Text>
+                    </TouchableOpacity>
+                </View>
             </View>
 
             <ScrollView contentContainerStyle={styles.scroll}>
@@ -467,19 +573,30 @@ export default function SolicitudFormScreen({ onNavigate, solicitudData }) {
 
                     {/* AÑADIDO: Selector de Tipo de Mantenimiento */}
                     <Text style={styles.label}>Tipo de Mantenimiento</Text>
-                    <View style={{ flexDirection: 'row', gap: 10, marginBottom: 10 }}>
-                        <TouchableOpacity
-                            style={[styles.typeOption, formData.maintenance_type === 'corrective' && styles.typeSelected]}
-                            onPress={() => setFormData({ ...formData, maintenance_type: 'corrective' })}
-                        >
-                            <Text style={[styles.typeText, formData.maintenance_type === 'corrective' && styles.typeTextSelected]}>Correctivo</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={[styles.typeOption, formData.maintenance_type === 'preventive' && styles.typeSelected]}
-                            onPress={() => setFormData({ ...formData, maintenance_type: 'preventive' })}
-                        >
-                            <Text style={[styles.typeText, formData.maintenance_type === 'preventive' && styles.typeTextSelected]}>Preventivo</Text>
-                        </TouchableOpacity>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 15 }}>
+                        {[
+                            { id: 'corrective', label: 'Correctivo' },
+                            { id: 'preventive', label: 'Preventivo' },
+                            { id: 'predictive', label: 'Predictivo' },
+                            { id: 'inspective', label: 'Inspectivo' },
+                            { id: 'overhaul', label: 'Overhaul' },
+                        ].map(type => (
+                            <TouchableOpacity
+                                key={type.id}
+                                style={[
+                                    styles.typeBtn,
+                                    formData.maintenance_type === type.id && styles.typeBtnActive
+                                ]}
+                                onPress={() => setFormData({ ...formData, maintenance_type: type.id })}
+                            >
+                                <Text style={[
+                                    styles.typeBtnText,
+                                    formData.maintenance_type === type.id && styles.typeBtnTextActive
+                                ]}>
+                                    {type.label}
+                                </Text>
+                            </TouchableOpacity>
+                        ))}
                     </View>
 
                     <Text style={styles.label}>Cliente</Text>
@@ -696,6 +813,71 @@ export default function SolicitudFormScreen({ onNavigate, solicitudData }) {
                     </View>
                 </View>
 
+                {/* SECCIÓN 7: OBSERVACIONES Y REPUESTOS */}
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>7. Observaciones Finales y Repuestos</Text>
+
+                    {/* Cuadro de observaciones */}
+                    <Text style={styles.label}>Observaciones del Trabajo</Text>
+                    <TextInput
+                        style={[styles.input, { minHeight: 80, textAlignVertical: 'top', padding: 10 }]}
+                        multiline
+                        numberOfLines={3}
+                        placeholder="Escriba aquí cualquier observación adicional o comentario final..."
+                        value={formData.mars_final_observations}
+                        onChangeText={(v) => setFormData({ ...formData, mars_final_observations: v })}
+                    />
+
+                    {/* Fila del Switch para Repuestos */}
+                    <View style={styles.switchRow}>
+                        <Text style={[styles.label, { marginBottom: 0 }]}>¿Se utilizaron repuestos en este servicio?</Text>
+                        <Switch
+                            trackColor={{ false: '#767577', true: '#a3caf7' }}
+                            thumbColor={formData.mars_used_parts ? '#01579b' : '#f4f3f4'}
+                            value={formData.mars_used_parts}
+                            onValueChange={(v) => {
+                                setFormData({ ...formData, mars_used_parts: v });
+                                if (v && repuestos.length === 0) handleAddRepuesto(); // Añade una fila automática al activar
+                            }}
+                        />
+                    </View>
+
+                    {/* Formulario dinámico de repuestos (Solo visible si el Switch está activo) */}
+                    {formData.mars_used_parts && (
+                        <View style={styles.partsContainer}>
+                            <Text style={styles.subLabel}>Lista de Repuestos Utilizados</Text>
+
+                            {repuestos.map((repuesto, index) => (
+                                <View key={index} style={styles.partRow}>
+                                    <TextInput
+                                        style={[styles.input, { flex: 2, marginBottom: 0 }]}
+                                        placeholder="Descripción del repuesto..."
+                                        value={repuesto.name}
+                                        onChangeText={(v) => handleUpdateRepuesto(index, 'name', v)}
+                                    />
+                                    <TextInput
+                                        style={[styles.input, { flex: 0.6, marginBottom: 0, textAlign: 'center' }]}
+                                        placeholder="Cant."
+                                        keyboardType="numeric"
+                                        value={repuesto.quantity}
+                                        onChangeText={(v) => handleUpdateRepuesto(index, 'quantity', v)}
+                                    />
+                                    <TouchableOpacity
+                                        style={styles.deletePartBtn}
+                                        onPress={() => handleRemoveRepuesto(index)}
+                                    >
+                                        <FontAwesome5 name="trash-alt" size={16} color="#e74c3c" />
+                                    </TouchableOpacity>
+                                </View>
+                            ))}
+
+                            <TouchableOpacity style={styles.addPartBtn} onPress={handleAddRepuesto}>
+                                <FontAwesome5 name="plus" size={14} color="#01579b" style={{ marginRight: 8 }} />
+                                <Text style={styles.addPartBtnText}>Añadir otro repuesto</Text>
+                            </TouchableOpacity>
+                        </View>
+                    )}
+                </View>
             </ScrollView>
 
             {/* Modal Multi-Propósito (Simplificado para espacio) */}
@@ -869,4 +1051,73 @@ const styles = StyleSheet.create({
     richTextContainer: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, overflow: 'hidden', backgroundColor: '#fafafa' },
     richBar: { backgroundColor: '#f0f4f8', borderBottomWidth: 1, borderColor: '#ddd' },
     richEditorContainer: { minHeight: 150 },
+
+    // Estilos para los botones de Tipo de Mantenimiento (Tags)
+    typeBtn: {
+        paddingVertical: 8,
+        paddingHorizontal: 16,
+        backgroundColor: '#f8f9fa',
+        borderWidth: 1,
+        borderColor: '#dee2e6',
+        borderRadius: 20, // Bordes bien redondeados estilo "píldora"
+    },
+    typeBtnActive: {
+        backgroundColor: '#01579b',
+        borderColor: '#01579b',
+    },
+    typeBtnText: {
+        fontSize: 14,
+        color: '#6c757d',
+        fontWeight: '600',
+    },
+    typeBtnTextActive: {
+        color: '#ffffff',
+    },
+
+    // Estilos de la sección de Repuestos
+    switchRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginTop: 15,
+        marginBottom: 10,
+        backgroundColor: '#f8f9fa',
+        padding: 10,
+        borderRadius: 8,
+    },
+    partsContainer: {
+        marginTop: 5,
+        backgroundColor: '#fff',
+        borderWidth: 1,
+        borderColor: '#e2e8f0',
+        borderRadius: 8,
+        padding: 12,
+    },
+    partRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        marginBottom: 10,
+    },
+    deletePartBtn: {
+        padding: 12,
+        backgroundColor: '#fdf2f2',
+        borderRadius: 6,
+    },
+    addPartBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 10,
+        borderWidth: 1,
+        borderColor: '#01579b',
+        borderStyle: 'dashed',
+        borderRadius: 6,
+        marginTop: 5,
+    },
+    addPartBtnText: {
+        color: '#01579b',
+        fontWeight: '700',
+        fontSize: 13,
+    },
 });

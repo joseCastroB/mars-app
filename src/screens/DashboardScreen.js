@@ -1,14 +1,46 @@
 import React from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 // Asegúrate de tener @expo/vector-icons instalado (Expo lo trae por defecto)
 import { FontAwesome5 } from '@expo/vector-icons';
+import { logoutOdoo } from '../api/odoo';
 
 export default function DashboardScreen({ onNavigate }) {
+
+  // Función para confirmar antes de cerrar sesión
+  const handleLogout = () => {
+    Alert.alert(
+      'Cerrar Sesión',
+      '¿Estás seguro que deseas salir de tu cuenta?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { 
+          text: 'Sí, salir', 
+          style: 'destructive',
+          onPress: () => {
+            logoutOdoo(); // Limpia el token de Odoo
+            onNavigate('Login'); // Te regresa a la pantalla de inicio
+          } 
+        },
+      ]
+    );
+  };
+
   return (
-    <ScrollView style={styles.container} bounces={false}>
-      <View style={styles.header}>
-        <Text style={styles.welcome}>Panel de Control</Text>
-        <Text style={styles.subtitle}>Mantenimiento Mars</Text>
+    <ScrollView style={styles.container}>
+
+      <View style={[styles.header, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}>
+        
+        {/* 1. Agrupamos los textos en su propia caja para que queden uno sobre otro */}
+        <View>
+          <Text style={styles.welcome}>Panel de Control</Text>
+          <Text style={styles.subtitle}>Mantenimiento Mars</Text>
+        </View>
+
+        {/* 2. El botón ahora se irá automáticamente a la derecha gracias al space-between */}
+        <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
+          <FontAwesome5 name="sign-out-alt" size={22} color="#e74c3c" />
+        </TouchableOpacity>
+        
       </View>
 
       <View style={styles.grid}>
@@ -122,5 +154,28 @@ const styles = StyleSheet.create({
     fontSize: 14, 
     color: '#95a5a6', 
     lineHeight: 20 
+  },
+  headerContainer: {
+    flexDirection: 'row', // Coloca los elementos uno al lado del otro
+    justifyContent: 'space-between', // Separa el texto del botón a los extremos
+    alignItems: 'center', // Los centra verticalmente
+    paddingHorizontal: 20,
+    marginTop: 60, // Ajusta según el margen de tu celular
+    marginBottom: 30,
+  },
+  mainTitle: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#111',
+  },
+  subTitle: {
+    fontSize: 16,
+    color: '#7f8c8d',
+    marginTop: 4,
+  },
+  logoutBtn: {
+    padding: 10,
+    backgroundColor: '#fdecea', // Un fondo rojizo muy suave
+    borderRadius: 8,
   },
 });

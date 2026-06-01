@@ -60,6 +60,11 @@ export const loginOdoo = async (username, password) => {
   }
 };
 
+// Añade esta función justo debajo de tu loginOdoo
+export const logoutOdoo = () => {
+  sessionId = null; // Borra el token de la memoria del celular
+};
+
 // 2. FUNCIÓN GENÉRICA PARA LLAMADAS AL ORM (call_kw)
 const callOdoo = async (model, method, args = [], kwargs = {}) => {
   if (!sessionId) {
@@ -191,7 +196,8 @@ export const fetchSolicitudDetalle = async (id) => {
       'mars_equipment_ids', 'mars_worker_ids', 'mars_electrical_ids',
       'mars_photo_ids', 'mars_acta_ids', 'mars_gancho_ids',
       // ¡AQUÍ ESTÁN LOS NUEVOS CAMPOS DEL CERTIFICADO!
-      'mars_inspector_certificate', 'mars_inspector_certificate_name'
+      'mars_inspector_certificate', 'mars_inspector_certificate_name',
+      'mars_final_observations', 'mars_used_parts', 'mars_part_ids'
     ],
   });
 };
@@ -213,5 +219,25 @@ export const fetchMedidasElectricas = async (ids) => {
       'equipment_id', 'tension_nominal', 'tension_l1_l2', 'tension_l1_l3', 'tension_l2_l3', 
       'corriente_datos', 'corriente_l1', 'corriente_l2', 'corriente_l3'
     ],
+  });
+};
+
+// NUEVA FUNCIÓN: Construye el enlace directo para descargar el PDF
+export const getReportConfig = (requestId) => {
+  if (!sessionId) throw new Error('No hay sesión activa.');
+  return {
+    // Esta es la ruta nativa que Odoo usa para servir PDFs
+    url: `${ODOO_URL}/report/pdf/mars_mantenimiento.report_maintenance_template/${requestId}`,
+    headers: {
+      'Cookie': `session_id=${sessionId}` // Nuestra "llave" para que Odoo nos deje entrar
+    }
+  };
+};
+
+// NUEVA FUNCIÓN: Descarga la lista de repuestos utilizados
+export const fetchRepuestos = async (partIds) => {
+  if (!partIds || partIds.length === 0) return [];
+  return await callOdoo('mars.maintenance.part', 'search_read', [[['id', 'in', partIds]]], {
+    fields: ['name', 'quantity'],
   });
 };
